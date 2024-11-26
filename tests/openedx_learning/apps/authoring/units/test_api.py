@@ -196,3 +196,11 @@ class UnitTestCase(ComponentTestCase):
         Expected results:
         1. The frozen list is None after the unit version becomes a draft again.
         """
+
+    def test_delete_unit_version_2(self):
+        """Test deleting a unit version.
+
+        Expected results:
+        What happens when I delete a unit version (2)? What happens to the latest version?
+        and the previous version?
+        """
