@@ -1,5 +1,6 @@
 from django.db import models
 
+from openedx_learning.apps.authoring.containers.models_mixin import ContainerEntityVersionMixin
 from openedx_learning.apps.authoring.publishing.models import (
     PublishableEntity,
     PublishableEntityVersion,
@@ -58,17 +59,11 @@ class EntityListRow(models.Model):
     # So our approach to this is to use a value of None (null) to represent an
     # unpinned reference to a PublishableEntity. It's shorthand for "just use
     # the latest draft or published version of this, as appropriate".
-    draft_version = models.ForeignKey(
+    version = models.ForeignKey(
         PublishableEntityVersion,
         on_delete=models.RESTRICT,
         null=True,
-        related_name="draft_version",
-    )
-    published_version = models.ForeignKey(
-        PublishableEntityVersion,
-        on_delete=models.RESTRICT,
-        null=True,
-        related_name="published_version",
+        related_name="version",
     )
 
 
@@ -119,36 +114,46 @@ class ContainerEntityVersion(PublishableEntityVersionMixin):
         related_name="defined_list",
     )
 
-    # inital_list is an EntityList where all the versions are pinned, to show
-    # what the exact versions of the children were at the time that the
-    # Container was created. We could technically derive this, but it would be
-    # awkward to query.
-    #
-    # If the Container was defined so that all references were pinned, then this
-    # can point to the exact same EntityList as defined_list.
-    initial_list = models.ForeignKey(
-        EntityList,
-        on_delete=models.RESTRICT,
-        null=False,
-        related_name="initial_list",
-    )
 
-    # This is the EntityList that's created when the next ContainerEntityVersion
-    # is created. All references in this list should be pinned, and it serves as
-    # "the last state the children were in for this version of the Container".
-    # If defined_list has only pinned references, this should point to the same
-    # EntityList as defined_list and initial_list.
-    #
-    # This value is mutable if and only if there are unpinned references in
-    # defined_list. In that case, frozen_list should start as None, and be
-    # updated to pin references when another version of this Container becomes
-    # the Draft version. But if this version ever becomes the Draft *again*
-    # (e.g. the user hits "discard changes" or some kind of revert happens),
-    # then we need to clear this back to None.
-    frozen_list = models.ForeignKey(
-        EntityList,
-        on_delete=models.RESTRICT,
-        null=True,
-        default=None,
-        related_name="frozen_list",
-    )
+class Selector(PublishableEntityMixin):
+    """
+    A Selector represents a placeholder for 0-N PublishableEntities
+
+    A Selector is a PublishableEntity.
+
+    We'll probably want some kind of SelectorType hierarchy like we have
+    for ComponentType. But it's not necessarily exclusive–I haven't really
+    decided whether something can be both a Component *and* a
+    Selector, and doing so _might_ be convenient for shoving in XBlock
+    UI. In any case, I don't want to close the door on it.
+
+    A Selector has versions.
+    """
+    pass
+
+
+class SelectorVersion(PublishableEntityVersionMixin):
+    """
+    A SelectorVersion doesn't have to define any particular metadata.
+
+    Something like a SplitTestSelectorVersion might decide to model its children
+    as Variants, but that's up to individual models. The only thing that this
+    must have is a foreign key to Selector, and Variants that point to it.
+    """
+    selector = models.ForeignKey(Selector, on_delete=models.RESTRICT)
+
+
+class Variant(models.Model):
+    """
+    A SelectorVersion should have one or more Variants that could apply to it.
+
+    Variants could be created and stored as part of content (e.g. two different
+    A/B test options), or a Variant could be created on a per-user basis–e.g. a
+    randomly ordered grouping of ten problems from a set of 100.
+
+    We are going to assume that a single user is only mapped to one Variant per
+    Selector, and that mapping will happen via a model in the ``learning``
+    package).
+    """
+    entity_list = models.OneToOneField(EntityList, on_delete=models.RESTRICT, primary_key=True)
+    selector_version = models.ForeignKey(SelectorVersion, on_delete=models.RESTRICT)
