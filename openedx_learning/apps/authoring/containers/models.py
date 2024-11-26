@@ -10,68 +10,6 @@ from ..publishing.model_mixins import (
 )
 
 
-class EntityList(models.Model):
-    """
-    EntityLists are a common structure to hold parent-child relations.
-
-    EntityLists are not PublishableEntities in and of themselves. That's because
-    sometimes we'll want the same kind of data structure for things that we
-    dynamically generate for individual students (e.g. Variants). EntityLists are
-    anonymous in a sense–they're pointed to by ContainerEntityVersions and
-    other models, rather than being looked up by their own identifers.
-    """
-
-    pass
-
-
-class EntityListRow(models.Model):
-    """
-    Each EntityListRow points to a PublishableEntity, optionally at a specific
-    version.
-
-    There is a row in this table for each member of an EntityList. The order_num
-    field is used to determine the order of the members in the list.
-    """
-
-    entity_list = models.ForeignKey(EntityList, on_delete=models.CASCADE)
-
-    # This ordering should be treated as immutable–if the ordering needs to
-    # change, we create a new EntityList and copy things over.
-    order_num = models.PositiveIntegerField()
-
-    # Simple case would use these fields with our convention that null versions
-    # means "get the latest draft or published as appropriate". These entities
-    # could be Selectors, in which case we'd need to do more work to find the right
-    # variant. The publishing app itself doesn't know anything about Selectors
-    # however, and just treats it as another PublishableEntity.
-    entity = models.ForeignKey(PublishableEntity, on_delete=models.RESTRICT)
-
-    # The version references point to the specific PublishableEntityVersion that
-    # this EntityList has for this PublishableEntity for both the draft and
-    # published states. However, we don't want to have to create new EntityList
-    # every time that a member is updated, because that would waste a lot of
-    # space and make it difficult to figure out when the metadata of something
-    # like a Unit *actually* changed, vs. when its child members were being
-    # updated. Doing so could also potentially lead to race conditions when
-    # updating multiple layers of containers.
-    #
-    # So our approach to this is to use a value of None (null) to represent an
-    # unpinned reference to a PublishableEntity. It's shorthand for "just use
-    # the latest draft or published version of this, as appropriate".
-    draft_version = models.ForeignKey(
-        PublishableEntityVersion,
-        on_delete=models.RESTRICT,
-        null=True,
-        related_name="draft_version",
-    )
-    published_version = models.ForeignKey(
-        PublishableEntityVersion,
-        on_delete=models.RESTRICT,
-        null=True,
-        related_name="published_version",
-    )
-
-
 class ContainerEntity(PublishableEntityMixin):
     """
     NOTE: We're going to want to eventually have some association between the
@@ -109,46 +47,64 @@ class ContainerEntityVersion(PublishableEntityVersionMixin):
         related_name="versions",
     )
 
-    # This is the EntityList that the author defines. This should never change,
-    # even if the things it references get soft-deleted (because we'll need to
-    # maintain it for reverts).
-    defined_list = models.ForeignKey(
-        EntityList,
-        on_delete=models.RESTRICT,
-        null=False,
-        related_name="defined_list",
-    )
 
-    # inital_list is an EntityList where all the versions are pinned, to show
-    # what the exact versions of the children were at the time that the
-    # Container was created. We could technically derive this, but it would be
-    # awkward to query.
-    #
-    # If the Container was defined so that all references were pinned, then this
-    # can point to the exact same EntityList as defined_list.
-    initial_list = models.ForeignKey(
-        EntityList,
-        on_delete=models.RESTRICT,
-        null=False,
-        related_name="initial_list",
-    )
+class ContainerMember(models.Model):
+    """
+    Each EntityListRow points to a PublishableEntity, optionally at a specific
+    version.
 
-    # This is the EntityList that's created when the next ContainerEntityVersion
-    # is created. All references in this list should be pinned, and it serves as
-    # "the last state the children were in for this version of the Container".
-    # If defined_list has only pinned references, this should point to the same
-    # EntityList as defined_list and initial_list.
-    #
-    # This value is mutable if and only if there are unpinned references in
-    # defined_list. In that case, frozen_list should start as None, and be
-    # updated to pin references when another version of this Container becomes
-    # the Draft version. But if this version ever becomes the Draft *again*
-    # (e.g. the user hits "discard changes" or some kind of revert happens),
-    # then we need to clear this back to None.
-    frozen_list = models.ForeignKey(
-        EntityList,
+    There is a row in this table for each member of an EntityList. The order_num
+    field is used to determine the order of the members in the list.
+    """
+
+    container_entity_version = models.ForeignKey(ContainerEntityVersion, on_delete=models.CASCADE)
+    order_num = models.PositiveIntegerField()
+    entity = models.ForeignKey(PublishableEntity, on_delete=models.RESTRICT)
+    version = models.ForeignKey(
+        PublishableEntityVersion,
         on_delete=models.RESTRICT,
         null=True,
-        default=None,
-        related_name="frozen_list",
+        related_name="version",
     )
+
+class Selector(PublishableEntityMixin):
+    """
+    A Selector represents a placeholder for 0-N PublishableEntities
+
+    A Selector is a PublishableEntity.
+
+    We'll probably want some kind of SelectorType hierarchy like we have
+    for ComponentType. But it's not necessarily exclusive–I haven't really
+    decided whether something can be both a Component *and* a
+    Selector, and doing so _might_ be convenient for shoving in XBlock
+    UI. In any case, I don't want to close the door on it.
+
+    A Selector has versions.
+    """
+    pass
+
+
+class SelectorVersion(PublishableEntityVersionMixin):
+    """
+    A SelectorVersion doesn't have to define any particular metadata.
+
+    Something like a SplitTestSelectorVersion might decide to model its children
+    as Variants, but that's up to individual models. The only thing that this
+    must have is a foreign key to Selector, and Variants that point to it.
+    """
+    selector = models.ForeignKey(Selector, on_delete=models.RESTRICT)
+
+
+class Variant(ContainerEntityVersion):
+    """
+    A SelectorVersion should have one or more Variants that could apply to it.
+
+    Variants could be created and stored as part of content (e.g. two different
+    A/B test options), or a Variant could be created on a per-user basis–e.g. a
+    randomly ordered grouping of ten problems from a set of 100.
+
+    We are going to assume that a single user is only mapped to one Variant per
+    Selector, and that mapping will happen via a model in the ``learning``
+    package).
+    """
+    selector_version = models.ForeignKey(SelectorVersion, on_delete=models.RESTRICT)
